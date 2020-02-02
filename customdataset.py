@@ -8,25 +8,14 @@ from PIL import Image
 
 class CustomDataset(Dataset):
 
-    def __init__(self, root, anno, transforms=None):
-        self.root = root
-        self.anno = anno
+    def __init__(self, img_dir, anno_dir, transforms=None):
+        self.img_dir = img_dir
+        self.anno_dir = anno_dir
         self.transforms = transforms
-        self.exts = ['jpg', 'png', 'jpeg']
+        self.exts = ['jpg', 'png', 'jpeg', 'bmp']
 
-        self.img_list_path = list()
-        for f in os.scandir(self.root):
-            if f.is_dir():
-                raise FileExistsError
-            else:
-                self.img_list_path.append(os.path.join(self.root, f.name))
-
-        self.anno_list_path = list()
-        for f in os.scandir(self.anno):
-            if f.is_dir():
-                raise FileExistsError
-            else:
-                self.anno_list_path.append(os.path.join(self.anno, f.name))
+        self.img_list_path = [os.path.join(self.img_dir, f.name) for f in os.scandir(img_dir)]
+        self.anno_list_path = [os.path.join(self.anno_dir, f.name) for f in os.scandir(anno_dir)]
 
     def __getitem__(self, idx):
         img = Image.open(self.img_list_path[idx]).convert('RGB')
@@ -45,12 +34,3 @@ class CustomDataset(Dataset):
 
     def __len__(self):
         return len(self.img_list_paths)
-
-if __name__ == '__main__':
-
-    a = ['a','b','c']
-
-    b = 'a'
-
-    if a[0] == b:
-        raise FileExistsError('iiiii')

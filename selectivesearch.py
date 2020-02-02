@@ -6,3 +6,15 @@ def ss(img):
     cv2.setNumThreads(4)
 
     img
+
+
+import torch
+import torchvision.models.detection.faster_rcnn
+
+a = (5 > 4) & (6 > 4)
+print(torch.as_tensor(a).nonzero().squeeze(1))
+
+torch.clamp()
+
+torchvision.ops.nms()
+
