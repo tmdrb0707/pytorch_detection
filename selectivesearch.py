@@ -10,6 +10,8 @@ def ss(img):
 
 import torch
 import torchvision.models.detection.faster_rcnn
+from  torchvision.datasets import CocoDetection
+import pycocotools
 
 a = (5 > 4) & (6 > 4)
 print(torch.as_tensor(a).nonzero().squeeze(1))

@@ -1,10 +1,9 @@
-
 import os
-import xml.etree.ElementTree as ET
-import glob
 
+from data_utils import loadAnns
 from torch.utils.data import Dataset
 from PIL import Image
+from utils import transforms
 
 class CustomDataset(Dataset):
 
@@ -19,18 +18,11 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         img = Image.open(self.img_list_path[idx]).convert('RGB')
-        tree = ET.parse(source=self.anno_list_path[idx])
-        objs = tree.findall('object')
+        target = loadAnns(self.anno_list_path[idx])
+        if self.transforms is not None:
+            img, target = self.transforms(img, target)
 
-        boxes = list()
-        labels = list()
-
-        for obj in objs:
-            xmin = int(obj.find('bndbox').find('xmin').text)
-            ymin = int(obj.find('bndbox').find('ymin').text)
-            xmax = int(obj.find('bndbox').find('xmax').text)
-            ymax = int(obj.find('bndbox').find('ymax').text)
-            boxes.append([xmin, ymin, xmax, ymax])
+        return img, target
 
     def __len__(self):
-        return len(self.img_list_paths)
+        return len(self.img_list_path)
