@@ -13,8 +13,9 @@ Because the number of images is smaller in the person keypoint subset of COCO,
 the number of epochs should be adapted so that we have the same number of iterations.
 """
 import datetime
-import os
 import time
+import numpy as np
+import os
 
 import torch
 import torch.utils.data
@@ -23,24 +24,14 @@ import torchvision
 import torchvision.models.detection
 import torchvision.models.detection.mask_rcnn
 
-from coco_utils import get_coco, get_coco_kp
+from utils.data_utils import CustomDataset
+from torch.utils.data.sampler import SubsetRandomSampler
 
 from group_by_aspect_ratio import GroupedBatchSampler, create_aspect_ratio_groups
 from engine import train_one_epoch, evaluate
 
-import utils
-import transforms as T
-
-
-def get_dataset(name, image_set, transform, data_path):
-    paths = {
-        "coco": (data_path, get_coco, 91),
-        "coco_kp": (data_path, get_coco_kp, 2)
-    }
-    p, ds_fn, num_classes = paths[name]
-
-    ds = ds_fn(p, image_set=image_set, transforms=transform)
-    return ds, num_classes
+import utils.utils as utils
+import utils.transforms as T
 
 
 def get_transform(train):
@@ -55,47 +46,58 @@ def main(args):
     utils.init_distributed_mode(args)
     print(args)
 
-    device = torch.device(args.device)
+    # device = torch.device(args.device)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    # Data loading code
     print("Loading data")
 
-    dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
-    dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
+    # dataset, num_classes = get_dataset(args.dataset, "train", get_transform(train=True), args.data_path)
+    # dataset_test, _ = get_dataset(args.dataset, "val", get_transform(train=False), args.data_path)
+    dataset = CustomDataset(args.img_data_path, args.anno_data_path, transforms=get_transform(train=True))
+    dataset_size = len(dataset)
+    indices = list(range(dataset_size))
+    split = int(np.floor(.2 * dataset_size))
+    random_seed = 42
+    np.random.seed(random_seed)
+    np.random.shuffle(indices)
+    train_indices, val_indices = indices[split:], indices[:split]
+    train_sampler = SubsetRandomSampler(train_indices)
+    test_sampler = SubsetRandomSampler(val_indices)
 
     print("Creating data loaders")
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test)
-    else:
-        train_sampler = torch.utils.data.RandomSampler(dataset)
-        test_sampler = torch.utils.data.SequentialSampler(dataset_test)
-
-    if args.aspect_ratio_group_factor >= 0:
-        group_ids = create_aspect_ratio_groups(dataset, k=args.aspect_ratio_group_factor)
-        train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
-    else:
-        train_batch_sampler = torch.utils.data.BatchSampler(
-            train_sampler, args.batch_size, drop_last=True)
+    # if args.distributed:
+    #     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset_train)
+    #     test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test)
+    # else:
+    #     train_sampler = torch.utils.data.RandomSampler(dataset_train)
+    #     test_sampler = torch.utils.data.SequentialSampler(dataset_test)
+    #
+    # if args.aspect_ratio_group_factor >= 0:
+    #     group_ids = create_aspect_ratio_groups(dataset_train, k=args.aspect_ratio_group_factor)
+    #     train_batch_sampler = GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
+    # else:
+    #     train_batch_sampler = torch.utils.data.BatchSampler(
+    #         train_sampler, args.batch_size, drop_last=True)
 
     data_loader = torch.utils.data.DataLoader(
-        dataset, batch_sampler=train_batch_sampler, num_workers=args.workers,
+        dataset, batch_size=2, sampler=train_sampler, num_workers=args.workers,
         collate_fn=utils.collate_fn)
 
     data_loader_test = torch.utils.data.DataLoader(
-        dataset_test, batch_size=1,
+        dataset, batch_size=1,
         sampler=test_sampler, num_workers=args.workers,
         collate_fn=utils.collate_fn)
 
     print("Creating model")
+    num_classes = 2  # 1 class (Car) + background
     model = torchvision.models.detection.__dict__[args.model](num_classes=num_classes,
                                                               pretrained=args.pretrained)
     model.to(device)
 
     model_without_ddp = model
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        model_without_ddp = model.module
+    # if args.distributed:
+    #     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+    #     model_without_ddp = model.module
 
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(
@@ -118,8 +120,8 @@ def main(args):
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
+        # if args.distributed:
+        #     train_sampler.set_epoch(epoch)
         train_one_epoch(model, optimizer, data_loader, device, epoch, args.print_freq)
         lr_scheduler.step()
         if args.output_dir:
@@ -134,7 +136,7 @@ def main(args):
         # evaluate after every epoch
         evaluate(model, data_loader_test, device=device)
 
-    total_time = time.time()1 - start_time
+    total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
 
@@ -143,14 +145,15 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
         description=__doc__)
-
-    parser.add_argument('--data-path', default='/datasets01/COCO/022719/', help='dataset')
-    parser.add_argument('--dataset', default='coco', help='dataset')
-    parser.add_argument('--model', default='maskrcnn_resnet50_fpn', help='model')
-    parser.add_argument('--device', default='cuda', help='device')
+    # parser.add_argument('--data-path', default='/datasets01/COCO/022719/', help='dataset')
+    # parser.add_argument('--dataset', default='coco', help='dataset')
+    parser.add_argument('--img-data-path', default='./data/img', help='dataset')
+    parser.add_argument('--anno-data-path', default='./data/anno', help='dataset')
+    parser.add_argument('--model', default='fasterrcnn_resnet50_fpn', help='model')
+    parser.add_argument('--device', default='cpu', help='device')
     parser.add_argument('-b', '--batch-size', default=2, type=int,
                         help='images per gpu, the total batch size is $NGPU x batch_size')
-    parser.add_argument('--epochs', default=26, type=int, metavar='N',
+    parser.add_argument('--epochs', default=30, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
@@ -166,7 +169,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr-steps', default=[16, 22], nargs='+', type=int, help='decrease lr every step-size epochs')
     parser.add_argument('--lr-gamma', default=0.1, type=float, help='decrease lr by a factor of lr-gamma')
     parser.add_argument('--print-freq', default=20, type=int, help='print frequency')
-    parser.add_argument('--output-dir', default='.', help='path where to save')
+    parser.add_argument('--output-dir', default='./models', help='path where to save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, help='start epoch')
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
